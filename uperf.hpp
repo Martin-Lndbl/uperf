@@ -1,5 +1,4 @@
 #pragma once
-
 // TODO: Distinguish between intel and amd. Currently, only amd(zen3-5) is
 // supported
 
@@ -75,16 +74,51 @@ inline void msr_stop(int32_t counter, uint32_t evtSel) {
 inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel, uint64_t value) {
   // Ensure the event is supported
   uint64_t pmceid;
-  if (value < 64) {
+  uint64_t cmp;
+  // For pmuv3p0 and below
+  // if (value < 64) {
+  //   cmp = value;
+  //   asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
+  // } else if (value < 128){
+  //   asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
+  //   cmp = value - 64;
+  // } else {
+  //   std::cout << "Warning: Requested event 0x" << std::hex << value << " could not be checked for compatibility" << std::endl;
+  //   goto skipcheck;
+  // }
+
+  // For pmuv3p1 and above
+  if (value < 0x20) {
+    // The event is supported if pmceid0[value] = 1. (lower 32 bit of pmceid0)
+    cmp = value;
     asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
-  } else {
+  } else if (value < 0x40) {
+    // The event is supported if pmceid1[value-0x20] = 1. (lower 32 bit of pmceid1)
+    cmp = value - 0x20;
     asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
-    value -= 64;
+  } else if (value < 0x4000) {
+    // There is no pmceid3 in 64bit mode to validate these counters
+    std::cout << "Warning: Requested event 0x" << std::hex << value << " could not be checked for compatibility" << std::endl;
+    goto skipcheck;
+  } else if (value < 0x4020) {
+    // The event is supported if pmceid0[value-0x4000] = 1. (upper 32 bit of pmceid0)
+    cmp = value - 0x4000;
+    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
+  } else if (value < 0x4040) {
+    // The event is supported if pmceid1[value-0x4020] = 1. (upper 32 bit of pmceid1)
+    cmp = value - 0x4020;
+    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
+  } else {
+    // There is no pmceid3 in 64bit mode to validate these counters
+    std::cout << "Warning: Requested event 0x" << std::hex << value << " could not be checked for compatibility" << std::endl;
+    goto skipcheck;
   }
 
-  if(((1ull << value) & pmceid) == 0) {
+  if(((1ull << cmp) & pmceid) == 0) {
     std::cerr << "Requested event 0x" << std::hex << value << " is not supported." << std::endl;
   }
+
+skipcheck:
 
   // Write event configuration into corresponding register
   switch(evtSel) {
@@ -345,6 +379,8 @@ typedef enum : uint64_t {
   STALL_OP = 0x3F,
   // Level 1 data cache read
   L1D_CACHE_RD = 0x40,
+  // Level 2 data cache read miss
+  L2D_CACHE_MISS_RD = 0x4009,
 #endif
 } EventSelect;
 
