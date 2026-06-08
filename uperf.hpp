@@ -75,7 +75,7 @@ inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel, uint64_t valu
   // Ensure the event is supported
   uint64_t pmceid;
   uint64_t cmp;
-  // For pmuv3p0 and below
+  // Without FEAT_PMUv3p1
   // if (value < 64) {
   //   cmp = value;
   //   asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
@@ -87,7 +87,7 @@ inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel, uint64_t valu
   //   goto skipcheck;
   // }
 
-  // For pmuv3p1 and above
+  // With FEAT_PMUv3p1
   if (value < 0x20) {
     // The event is supported if pmceid0[value] = 1. (lower 32 bit of pmceid0)
     cmp = value;
@@ -271,9 +271,9 @@ typedef enum : uint64_t {
   // Mispredicted or not predicted branch speculatively executed
   BR_MIS_PRED = 0x4300C3,
   // Cache miss on last on chip cache (i.e. L2)
-  LL_CACHE_MISS_RD = 0x430964,
+  L2_CACHE_MISS = 0x430964,
   // Cache access on last on chip cache (i.e. L2)
-  LL_CACHE_RD = 0x430729,
+  L2_CACHE = 0x430729,
   // Number of TLB flushes
   TLB_FLUSHES = 0x43FF78,
 #elifdef ARCH_TARGET_ARM64
@@ -360,11 +360,11 @@ typedef enum : uint64_t {
   // Attributable Level 3 data cache access write-back
   L3D_CACHE_WB = 0x2C,
   // Last level data cache read
-  LL_CACHE_RD = 0x36,
+  LL_CACHE = 0x36,
   // Last level data cache read miss
-  LL_CACHE_MISS_RD = 0x37,
+  LL_CACHE_MISS = 0x37,
   // Level 1 data cache read miss
-  L1D_CACHE_MISS_RD = 0x39,
+  L1D_CACHE_MISS = 0x39,
   // Operation retired
   OP_COMPLETE = 0x3A,
   // Operation speculated
@@ -378,9 +378,9 @@ typedef enum : uint64_t {
   // No operation sent for execution on a slot
   STALL_OP = 0x3F,
   // Level 1 data cache read
-  L1D_CACHE_RD = 0x40,
+  L1D_CACHE = 0x40,
   // Level 2 data cache read miss
-  L2D_CACHE_MISS_RD = 0x4009,
+  L2_CACHE_MISS = 0x4009,
 #endif
 } EventSelect;
 
@@ -429,7 +429,7 @@ struct Collection {
 
     registerCounter("cycles", CORE, CPU_CYCLES);
     registerCounter("instructions", CORE, INST_RETIRED);
-    registerCounter("cache-misses", CORE, LL_CACHE_MISS_RD);
+    registerCounter("L2-cache-misses", CORE, L2_CACHE_MISS);
     registerCounter("branch-misses", CORE, BR_MIS_PRED);
   }
 
