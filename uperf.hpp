@@ -22,21 +22,29 @@
 
 #ifdef ARCH_TARGET_X86_64
 
-inline void enable_pmu() {
-  // TODO: This is currently a noop as the pmu is usually enabled by default
-}
-
-inline void start_msr(int32_t msr) {
-  // TODO: This is currently merged with write_msr.
-}
-
-inline void write_msr(uint32_t msr, uint64_t value) {
+inline void msr_write(uint32_t msr, uint64_t value) {
   asm volatile("wrmsr"
                :
                : "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32)));
 }
 
-inline uint64_t read_msr(uint32_t msr) {
+inline void enable_pmu() {
+  // TODO: This is currently a noop as the pmu is usually enabled by default
+}
+
+inline void msr_stop(int32_t counter, uint32_t evtSel) {
+  msr_write(evtSel, 0);
+}
+
+inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel, uint64_t value) {
+  msr_write(evtSel, value);
+}
+
+inline void msr_write_counter(uint32_t msr, uint64_t value) {
+  msr_write(msr, value);
+}
+
+inline uint64_t msr_read(uint32_t msr) {
   uint32_t low, high;
   asm volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
   return ((uint64_t)high << 32) | low;
@@ -44,7 +52,80 @@ inline uint64_t read_msr(uint32_t msr) {
 
 #elifdef ARCH_TARGET_ARM64
 
-// TODO
+inline void enable_pmu() {
+  uint64_t pmcr;
+
+  // 1. Read PMCR_EL0, set E (Enable)
+  // We could also set 0b101 to also reset the cycle counter bits but not sure if its required
+  asm volatile("mrs %0, pmcr_el0" : "=r"(pmcr));
+  asm volatile("msr pmcr_el0, %0" : : "r"(pmcr | 0b1));
+
+  // 2. Enable the cycle counter via PMCNTENSET_EL0 (bit 31)
+  asm volatile("msr pmcntenset_el0, %0" : : "r"(1ull << 31));
+
+  // Ensure pipeline is synchronized before we start counting
+  asm volatile("isb");
+}
+
+inline void msr_stop(int32_t counter, uint32_t evtSel) {
+  // Disable counter
+  asm volatile("msr pmcntenclr_el0, %0" : : "r"(1ull << 31));
+}
+
+inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel, uint64_t value) {
+  // Ensure the event is supported
+  uint64_t pmceid;
+  if (value < 64) {
+    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
+  } else {
+    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
+    value -= 64;
+  }
+
+  if(((1ull << value) & pmceid) == 0) {
+    std::cerr << "Requested event 0x" << std::hex << value << " is not supported." << std::endl;
+  }
+
+  // Write event configuration into corresponding register
+  switch(evtSel) {
+    case 0: asm volatile("msr pmevtyper0_el0, %0" : : "r"(value)); break;
+    case 1: asm volatile("msr pmevtyper1_el0, %0" : : "r"(value)); break;
+    case 2: asm volatile("msr pmevtyper2_el0, %0" : : "r"(value)); break;
+    case 3: asm volatile("msr pmevtyper3_el0, %0" : : "r"(value)); break;
+    case 4: asm volatile("msr pmevtyper4_el0, %0" : : "r"(value)); break;
+    case 5: asm volatile("msr pmevtyper5_el0, %0" : : "r"(value)); break;
+  }
+
+  // enable counter at index counter
+  asm volatile("msr pmcntenset_el0, %0" : : "r"(1ull << counter));
+
+  // Ensure pipeline is synchronized before we start counting
+  asm volatile("isb");
+}
+
+inline void msr_write_counter(uint32_t counter, uint64_t value) {
+  switch(counter) {
+    case 0: asm volatile("msr pmevcntr0_el0, %0" : : "r"(value)); break;
+    case 1: asm volatile("msr pmevcntr1_el0, %0" : : "r"(value)); break;
+    case 2: asm volatile("msr pmevcntr2_el0, %0" : : "r"(value)); break;
+    case 3: asm volatile("msr pmevcntr3_el0, %0" : : "r"(value)); break;
+    case 4: asm volatile("msr pmevcntr4_el0, %0" : : "r"(value)); break;
+    case 5: asm volatile("msr pmevcntr5_el0, %0" : : "r"(value)); break;
+  }
+}
+
+inline uint64_t msr_read(uint32_t counter) {
+  uint64_t value;
+  switch(counter) {
+    case 0: asm volatile("mrs %0, pmevcntr0_el0" : "=r"(value)); break;
+    case 1: asm volatile("mrs %0, pmevcntr1_el0" : "=r"(value)); break;
+    case 2: asm volatile("mrs %0, pmevcntr2_el0" : "=r"(value)); break;
+    case 3: asm volatile("mrs %0, pmevcntr3_el0" : "=r"(value)); break;
+    case 4: asm volatile("mrs %0, pmevcntr4_el0" : "=r"(value)); break;
+    case 5: asm volatile("mrs %0, pmevcntr5_el0" : "=r"(value)); break;
+  }
+  return value;
+}
 
 #endif
 
@@ -59,15 +140,19 @@ enum PMClass {
 #ifdef ARCH_TARGET_X86_64
   // Specifies on-core AMD events
   CORE,
+  // WARN: Not supported by KVM
   // Specifies Northbridge events to be counted and controls other aspects of
   // counter operation. Support for these MSRs is indicated by CPUID
   // Fn8000_0001_ECX.PerfCtrExtNB = 1
   NORTHBRIDGE,
+  // WARN: Not supported by KVM
   // Specifies the L2 cache events to be counted and controls other aspects of
   // counter operation. Support for these MSRs is indicated by CPUID
   // Fn8000_0001_ECX.PerfCtrExtL2I = 1.
   L2I,
 #elifdef ARCH_TARGET_ARM64
+  // Specifies on-core ARM events
+  CORE
 #endif
 };
 
@@ -95,15 +180,14 @@ struct PMC {
       : perfEvtSel(pmc.perfEvtSel), perfCtr(pmc.perfCtr), pmClass(pmc.pmClass),
         free(std::make_unique<std::atomic<bool>>(true)) {}
 
-  uint64_t probe() { return read_msr(perfCtr); }
+  uint64_t probe() { return msr_read(perfCtr); }
 
-  void configure(uint64_t bitmap) {
-    write_msr(perfCtr, 0);
-    write_msr(perfEvtSel, bitmap);
+  void start_with_conf(uint64_t value) {
+    msr_write_counter(perfCtr, 0);
+    msr_start_with_conf(perfCtr, perfEvtSel, value);
   }
 
-  void start(){};
-  void stop() { write_msr(perfEvtSel, 0); };
+  void stop() { msr_stop(perfCtr, perfEvtSel); };
 };
 
 // TODO: Extend this logic to support sharing counters between groups of cores
@@ -135,24 +219,132 @@ inline PMCSelect pmcSelect{
     PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
     PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
 #elifdef ARCH_TARGET_ARM64
+    PMC{0, 0, CORE}, PMC{1, 1, CORE}, PMC{2, 2, CORE},
+    PMC{3, 3, CORE}, PMC{4, 4, CORE}, PMC{5, 5, CORE},
 #endif
 };
 
 typedef enum : uint64_t {
 #ifdef ARCH_TARGET_X86_64
-  // To be applied to CORE event registers
-  CYCLES = 0x430076,
-  // To be applied to CORE event registers
-  INSTRUCTIONS = 0x4300C0,
-  // To be applied to CORE event registers
-  CACHE_MISSES = 0x430964,
-  // To be applied to CORE event registers
-  BRANCH_MISSES = 0x4300C3,
-  // To be applied to CORE event registers
+  // Cycle
+  CPU_CYCLES = 0x430076,
+  // Cycle where no operation is issued because of the frontend
+  STALL_FRONTEND = 0x4300A9,
+  // Instruction architecturally executed
+  INST_RETIRED = 0x4300C0,
+  // Predictable branch speculatively executed
+  BR_PRED = 0x4300C2,
+  // Mispredicted or not predicted branch speculatively executed
+  BR_MIS_PRED = 0x4300C3,
+  // Cache miss on last on chip cache (i.e. L2)
+  LL_CACHE_MISS_RD = 0x430964,
+  // Cache access on last on chip cache (i.e. L2)
+  LL_CACHE_RD = 0x430729,
+  // Number of TLB flushes
   TLB_FLUSHES = 0x43FF78,
-  // To be applied to CORE event registers
-  DATA_CACHE_ACCESSES = 0x430729,
 #elifdef ARCH_TARGET_ARM64
+  // Instruction architecturally executed, condition code check pass, software increment
+  SW_INCR = 0x0,
+  // Attributable Level 1 instruction cache refill
+  L1I_CACHE_REFILL = 0x1,
+  // Attributable Level 1 instruction TLB refills
+  L1I_TLB_REFILL = 0x2,
+  // Attributable Level 1 data cache refill
+  L1D_CACHE_REFILL = 0x3,
+  // Attributable Level 1 data cache access
+  L1D_CACHE = 0x4,
+  // Attributable Level 1 data TLB refills
+  L1D_TLB_REFILL = 0x5,
+  // Instruction architecturally executed, condition code check pass, load
+  LD_RETIRED = 0x6,
+  // Instruction architecturally executed, condition code check pass, store
+  ST_RETIRED = 0x7,
+  // Instruction architecturally executed
+  INST_RETIRED = 0x8,
+  // Exception Taken
+  EXC_TAKEN = 0x9,
+  // Instruction architecturally executed, condition code check pass, exception return
+  EXC_RETURN = 0xA,
+  // Instruction architecturally executed, condition code check pass, software change of the PC
+  PC_WRITE_RETIRED = 0xC,
+  // Instruction architecturally executed, immediate branch
+  BR_IMMED_RETIRED = 0xD,
+  // Instruction architecturally executed, condition code check pass, procedure return
+  BR_RETURN_RETIRED = 0xE,
+  // Instruction architecturally executed, condition code check pass, unaligned load or store
+  UNALIGNED_LDST_RETIRED = 0xF,
+  // Mispredicted or not predicted branch speculatively executed
+  BR_MIS_PRED = 0x10,
+  // Cycle
+  CPU_CYCLES = 0x11,
+  // Predictable branch speculatively executed
+  BR_PRED = 0x12,
+  // Data memory access
+  MEM_ACCESS = 0x13,
+  // Attributable Level 1 instruction cache access
+  L1I_CACHE = 0x14,
+  // Attributable Level 1 data cache write-back
+  L1D_CACHE_WB = 0x15,
+  // Attributable Level 2 data cache access
+  L2D_CACHE = 0x16,
+  // Attributable Level 2 data cache refill
+  L2D_CACHE_REFILL = 0x17,
+  // Attributable Level 2 data cache write-back
+  L2D_CACHE_WB = 0x18,
+  // Attributable Bus access
+  BUS_ACCESS = 0x19,
+  // Local memory error
+  MEMORY_ERROR = 0x1A,
+  // Operation speculatively executed
+  INST_SPEC = 0x1B,
+  // Bus cycle
+  BUS_CYCLES = 0x1D,
+  // For an odd numbered counter, increment when an overflow occurs on the preceding even-numbered counter on the same PE
+  CHAIN = 0x1E,
+  // Attributable Level 1 data cache allocation without refill
+  L1D_CACHE_ALLOCATE = 0x1F,
+  // Attributable Level 2 data cache allocation without refill
+  L2D_CACHE_ALLOCATE = 0x20,
+  // Instruction architecturally executed, branch
+  BR_RETIRED = 0x21,
+  // Instruction architecturally executed, mispredicted branch
+  BR_MIS_PRED_RETIRED = 0x22,
+  // No operation issued because of the frontend
+  STALL_FRONTEND = 0x23,
+  // No operation issued because of the backend
+  STALL_BACKEND = 0x24,
+  // Attributable Level 2 instruction cache access
+  L2I_CACHE = 0x27,
+  // Attributable Level 2 instruction cache refill
+  L2I_CACHE_REFILL = 0x28,
+  // Attributable Level 3 data cache allocation without refill
+  L3D_CACHE_ALLOCATE = 0x29,
+  // Attributable Level 3 data cache refill
+  L3D_CACHE_REFILL = 0x2A,
+  // Attributable Level 3 data cache access
+  L3D_CACHE = 0x2B,
+  // Attributable Level 3 data cache access write-back
+  L3D_CACHE_WB = 0x2C,
+  // Last level data cache read
+  LL_CACHE_RD = 0x36,
+  // Last level data cache read miss
+  LL_CACHE_MISS_RD = 0x37,
+  // Level 1 data cache read miss
+  L1D_CACHE_MISS_RD = 0x39,
+  // Operation retired
+  OP_COMPLETE = 0x3A,
+  // Operation speculated
+  OP_SPEC = 0x3B,
+  // No operation sent for execution
+  STALL = 0x3C,
+  // No operation sent for execution on a slot because of the backend
+  STALL_OP_BACKEND = 0x3D,
+  // No operation sent for execution on a slot because of the frontend
+  STALL_OP_FRONTEND = 0x3E,
+  // No operation sent for execution on a slot
+  STALL_OP = 0x3F,
+  // Level 1 data cache read
+  L1D_CACHE_RD = 0x40,
 #endif
 } EventSelect;
 
@@ -174,8 +366,7 @@ struct Event {
 
   void start() {
     pmc = corePMCs.acquire(pmClass);
-    pmc->configure(bitmap);
-    pmc->start();
+    pmc->start_with_conf(bitmap);
     before = pmc->probe();
   }
 
@@ -198,12 +389,12 @@ struct Collection {
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
 
   Collection() {
-    registerCounter("cycles", CORE, CYCLES);
-    registerCounter("instructions", CORE, INSTRUCTIONS);
-    registerCounter("cache-misses", CORE, CACHE_MISSES);
-    registerCounter("branch-misses", CORE, BRANCH_MISSES);
-    registerCounter("tlb-flushes", CORE, TLB_FLUSHES);
-    registerCounter("cache-accesses", CORE, DATA_CACHE_ACCESSES);
+    enable_pmu();
+
+    registerCounter("cycles", CORE, CPU_CYCLES);
+    registerCounter("instructions", CORE, INST_RETIRED);
+    registerCounter("cache-misses", CORE, LL_CACHE_MISS_RD);
+    registerCounter("branch-misses", CORE, BR_MIS_PRED);
   }
 
   void registerCounter(const std::string &name, PMClass pmClass,
