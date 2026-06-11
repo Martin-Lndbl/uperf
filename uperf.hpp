@@ -319,9 +319,9 @@ constexpr PMCEvent STALL_FRONTEND = {0x4300A9, CORE, "stall-frontend"};
 // Instruction architecturally executed
 constexpr PMCEvent INSTRUCTIONS = {0x4300C0, CORE, "instructions"};
 // Predictable branch speculatively executed
-constexpr PMCEvent BR_PRED = {0x4300C2, CORE, "branch-predictions"};
+constexpr PMCEvent BRANCH_PREDICTION = {0x4300C2, CORE, "branch-predictions"};
 // Mispredicted or not predicted branch speculatively executed
-constexpr PMCEvent BR_MIS_PRED = {0x4300C3, CORE, "branch-misses"};
+constexpr PMCEvent BRANCH_MISS = {0x4300C3, CORE, "branch-misses"};
 // Cache miss on last on chip cache (often: L2)
 constexpr PMCEvent L2_CACHE_MISS = {0x430964, CORE, "l2-cache-misses"};
 // Cache access on last on chip cache (often: L2)
@@ -329,120 +329,117 @@ constexpr PMCEvent L2_CACHE = {0x430729, CORE, "l2-cache-accesses"};
 // Number of TLB flushes
 constexpr PMCEvent TLB_FLUSHES = {0x43FF78, CORE, "tlb-flushes"};
 #elif defined ARCH_TARGET_ARM64
+// Instruction architecturally executed, condition code check pass, software
+// increment
+constexpr PMCEvent SW_INCR = {0x0, CORE, "software-increase"};
+// Attributable Level 1 instruction cache refill
+constexpr PMCEvent L1I_CACHE_REFILL = {0x1, CORE, "l1i-cache-refill"};
+// Attributable Level 1 instruction TLB refills
+constexpr PMCEvent L1I_TLB_REFILL = {0x2, CORE, "l1i-tlb-refill"};
+// Attributable Level 1 data cache refill
+constexpr PMCEvent L1D_CACHE_REFILL = {0x3, CORE, "l1d-cache-refill"};
+// Attributable Level 1 data cache access
+constexpr PMCEvent L1D_CACHE = {0x4, CORE, "l1d-cache-access"};
+// Attributable Level 1 data TLB refills
+constexpr PMCEvent L1D_TLB_REFILL = {0x5, CORE, "l1d-tlb-refill"};
+// Instruction architecturally executed, condition code check pass, load
+constexpr PMCEvent LD_RETIRED = {0x6, CORE, "load-instructions"};
+// Instruction architecturally executed, condition code check pass, store
+constexpr PMCEvent ST_RETIRED = {0x7, CORE, "store-instructions"};
+// Instruction architecturally executed
+constexpr PMCEvent INSTRUCTIONS = {0x8, CORE, "instructions"};
+// Exception Taken
+constexpr PMCEvent EXC_TAKEN = {0x9, CORE, "exceptions-taken"};
+// Instruction architecturally executed, condition code check pass,
+// exception return
+constexpr PMCEvent EXC_RETURN = {0xA, CORE, "exceptions-return"};
+// Instruction architecturally executed, condition code check pass, software
+// change of the PC
+constexpr PMCEvent PC_WRITE_RETIRED = {0xC, CORE, "software-pc-writes"};
+// Instruction architecturally executed, immediate branch
+constexpr PMCEvent BR_IMMED_RETIRED = {0xD, CORE, "immediate-branch-instructions"};
+// Instruction architecturally executed, condition code check pass,
+// procedure return
+constexpr PMCEvent BR_RETURN_RETIRED = {0xE, CORE, "procedure-return-instructions"};
+// Instruction architecturally executed, condition code check pass,
+// unaligned load or store
+constexpr PMCEvent UNALIGNED_LDST_RETIRED = {0xF, CORE, "unaligned-loadstore-instruction"};
+// Mispredicted or not predicted branch speculatively executed
+constexpr PMCEvent BR_MIS_PRED = {0x10, CORE, "branch-misses-issued"};
+// Cycle
+constexpr PMCEvent CPU_CYCLES = {0x11, CORE, "cpu-cycles"};
+// Predictable branch speculatively executed
+constexpr PMCEvent BR_PRED = {0x12, CORE, "branch-predictions-issued"};
+// Data memory access
+constexpr PMCEvent MEM_ACCESS = {0x13, CORE, "memory-accesses"};
+// Attributable Level 1 instruction cache access
+constexpr PMCEvent L1I_CACHE = {0x14, CORE, "l1i-cache-accesses"};
+// Attributable Level 1 data cache write-back
+constexpr PMCEvent L1D_CACHE_WB = {0x15, CORE, "l1d-cache-writebacks"};
+// Attributable Level 2 data cache access
+constexpr PMCEvent L2D_CACHE = {0x16, CORE, "l2d-cache-accesses"};
+// Attributable Level 2 data cache refill
+constexpr PMCEvent L2D_CACHE_REFILL = {0x17, CORE, "l2d-cache-refills"};
+// Attributable Level 2 data cache write-back
+constexpr PMCEvent L2D_CACHE_WB = {0x18, CORE, "l2d-cache-writebacks"};
+// Attributable Bus access
+constexpr PMCEvent BUS_ACCESS = {0x19, CORE, "bus-accesses"};
+// Local memory error
+constexpr PMCEvent MEMORY_ERROR = {0x1A, CORE, "memory-errors"};
+// Operation speculatively executed
+constexpr PMCEvent INST_SPEC = {0x1B, CORE, "speculative-instructions"};
+// Bus cycle
+constexpr PMCEvent BUS_CYCLES = {0x1D, CORE, "bus-cycles"};
+// For an odd numbered counter, increment when an overflow occurs on the
+// preceding even-numbered counter on the same PE
+constexpr PMCEvent CHAIN = {0x1E, CORE, "chain"};
+// Attributable Level 1 data cache allocation without refill
+constexpr PMCEvent L1D_CACHE_ALLOCATE = {0x1F, CORE, "l1d-cache-allocations"};
+// Attributable Level 2 data cache allocation without refill
+constexpr PMCEvent L2D_CACHE_ALLOCATE = {0x20, CORE, "l2d-cache-allocations"};
+// Instruction architecturally executed, branch
+constexpr PMCEvent BRANCH_PREDICTION = {0x21, CORE, "branch-predictions"};
+// Instruction architecturally executed, mispredicted branch
+constexpr PMCEvent BRANCH_MISS = {0x22, CORE, "branch-misses"};
+// No operation issued because of the frontend
+constexpr PMCEvent STALL_FRONTEND = {0x23, CORE, "frontend-stalls"};
+// No operation issued because of the backend
+constexpr PMCEvent STALL_BACKEND = {0x24, CORE, "backend-stalls"};
+// Attributable Level 2 instruction cache access
+constexpr PMCEvent L2I_CACHE = {0x27, CORE, "l2i-cache-accesses"};
+// Attributable Level 2 instruction cache refill
+constexpr PMCEvent L2I_CACHE_REFILL = {0x28, CORE, "l2i-cache-refills"};
+// Attributable Level 3 data cache allocation without refill
+constexpr PMCEvent L3D_CACHE_ALLOCATE = {0x29, CORE, "l3d-cache-allocations"};
+// Attributable Level 3 data cache refill
+constexpr PMCEvent L3D_CACHE_REFILL = {0x2A, CORE, "l3d-cache-refills"};
+// Attributable Level 3 data cache access
+constexpr PMCEvent L3D_CACHE = {0x2B, CORE, "l3d-cache-accesses"};
+// Attributable Level 3 data cache access write-back
+constexpr PMCEvent L3D_CACHE_WB = {0x2C, CORE, "l3d-cache-writebacks"};
+// Last level data cache read
+constexpr PMCEvent LL_CACHE = {0x36, CORE, "llc-cache-accesses"};
+// Last level data cache read miss
+constexpr PMCEvent LL_CACHE_MISS = {0x37, CORE, "llc-cache-misses"};
+// Level 1 data cache read miss
+constexpr PMCEvent L1D_CACHE_MISS = {0x39, CORE, "l1d-cache-misses"};
+// Operation retired
+constexpr PMCEvent OP_COMPLETE = {0x3A, CORE, "micro-operations-retired"};
+// Operation speculated
+constexpr PMCEvent OP_SPEC = {0x3B, CORE, "micro-operations-speculated"};
+// No operation sent for execution
+constexpr PMCEvent STALL = {0x3C, CORE, ""};
+// No operation sent for execution on a slot because of the backend
+constexpr PMCEvent STALL_OP_BACKEND = {0x3D, CORE, ""};
+// No operation sent for execution on a slot because of the frontend
+constexpr PMCEvent STALL_OP_FRONTEND = {0x3E, CORE, ""};
+// No operation sent for execution on a slot
+constexpr PMCEvent STALL_OP = {0x3F, CORE, ""};
+// Level 2 data cache read miss
+constexpr PMCEvent L2_CACHE_MISS = {0x4009, CORE, "l2-cache-misses"};
+
 #endif
 } // namespace Events
-
-#ifdef ARCH_TARGET_X86_64
-#elif defined ARCH_TARGET_ARM64
-  // Instruction architecturally executed, condition code check pass, software
-  // increment
-SW_INCR = 0x0,
-    // Attributable Level 1 instruction cache refill
-    L1I_CACHE_REFILL = 0x1,
-    // Attributable Level 1 instruction TLB refills
-    L1I_TLB_REFILL = 0x2,
-    // Attributable Level 1 data cache refill
-    L1D_CACHE_REFILL = 0x3,
-    // Attributable Level 1 data cache access
-    L1D_CACHE = 0x4,
-    // Attributable Level 1 data TLB refills
-    L1D_TLB_REFILL = 0x5,
-    // Instruction architecturally executed, condition code check pass, load
-    LD_RETIRED = 0x6,
-    // Instruction architecturally executed, condition code check pass, store
-    ST_RETIRED = 0x7,
-    // Instruction architecturally executed
-    INSTRUCTIONS = 0x8,
-    // Exception Taken
-    EXC_TAKEN = 0x9,
-    // Instruction architecturally executed, condition code check pass,
-    // exception return
-    EXC_RETURN = 0xA,
-    // Instruction architecturally executed, condition code check pass, software
-    // change of the PC
-    PC_WRITE_RETIRED = 0xC,
-    // Instruction architecturally executed, immediate branch
-    BR_IMMED_RETIRED = 0xD,
-    // Instruction architecturally executed, condition code check pass,
-    // procedure return
-    BR_RETURN_RETIRED = 0xE,
-    // Instruction architecturally executed, condition code check pass,
-    // unaligned load or store
-    UNALIGNED_LDST_RETIRED = 0xF,
-    // Mispredicted or not predicted branch speculatively executed
-    BR_MIS_PRED = 0x10,
-    // Cycle
-    CPU_CYCLES = 0x11,
-    // Predictable branch speculatively executed
-    BR_PRED = 0x12,
-    // Data memory access
-    MEM_ACCESS = 0x13,
-    // Attributable Level 1 instruction cache access
-    L1I_CACHE = 0x14,
-    // Attributable Level 1 data cache write-back
-    L1D_CACHE_WB = 0x15,
-    // Attributable Level 2 data cache access
-    L2D_CACHE = 0x16,
-    // Attributable Level 2 data cache refill
-    L2D_CACHE_REFILL = 0x17,
-    // Attributable Level 2 data cache write-back
-    L2D_CACHE_WB = 0x18,
-    // Attributable Bus access
-    BUS_ACCESS = 0x19,
-    // Local memory error
-    MEMORY_ERROR = 0x1A,
-    // Operation speculatively executed
-    INST_SPEC = 0x1B,
-    // Bus cycle
-    BUS_CYCLES = 0x1D,
-    // For an odd numbered counter, increment when an overflow occurs on the
-    // preceding even-numbered counter on the same PE
-    CHAIN = 0x1E,
-    // Attributable Level 1 data cache allocation without refill
-    L1D_CACHE_ALLOCATE = 0x1F,
-    // Attributable Level 2 data cache allocation without refill
-    L2D_CACHE_ALLOCATE = 0x20,
-    // Instruction architecturally executed, branch
-    BR_RETIRED = 0x21,
-    // Instruction architecturally executed, mispredicted branch
-    BR_MIS_PRED_RETIRED = 0x22,
-    // No operation issued because of the frontend
-    STALL_FRONTEND = 0x23,
-    // No operation issued because of the backend
-    STALL_BACKEND = 0x24,
-    // Attributable Level 2 instruction cache access
-    L2I_CACHE = 0x27,
-    // Attributable Level 2 instruction cache refill
-    L2I_CACHE_REFILL = 0x28,
-    // Attributable Level 3 data cache allocation without refill
-    L3D_CACHE_ALLOCATE = 0x29,
-    // Attributable Level 3 data cache refill
-    L3D_CACHE_REFILL = 0x2A,
-    // Attributable Level 3 data cache access
-    L3D_CACHE = 0x2B,
-    // Attributable Level 3 data cache access write-back
-    L3D_CACHE_WB = 0x2C,
-    // Last level data cache read
-    LL_CACHE = 0x36,
-    // Last level data cache read miss
-    LL_CACHE_MISS = 0x37,
-    // Level 1 data cache read miss
-    L1D_CACHE_MISS = 0x39,
-    // Operation retired
-    OP_COMPLETE = 0x3A,
-    // Operation speculated
-    OP_SPEC = 0x3B,
-    // No operation sent for execution
-    STALL = 0x3C,
-    // No operation sent for execution on a slot because of the backend
-    STALL_OP_BACKEND = 0x3D,
-    // No operation sent for execution on a slot because of the frontend
-    STALL_OP_FRONTEND = 0x3E,
-    // No operation sent for execution on a slot
-    STALL_OP = 0x3F,
-    // Level 2 data cache read miss
-    L2_CACHE_MISS = 0x4009,
-#endif
 
 // ---------------------------------------
 // High level measurement logic
@@ -495,7 +492,7 @@ struct Collection {
     registerCounter(Events::CPU_CYCLES);
     registerCounter(Events::INSTRUCTIONS);
     registerCounter(Events::L2_CACHE_MISS);
-    registerCounter(Events::BR_MIS_PRED);
+    registerCounter(Events::BRANCH_MISS);
   }
 
   void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce)); }
@@ -519,6 +516,8 @@ struct Collection {
     return std::chrono::duration<double>(stopTime - startTime).count();
   }
 
+  // IPC is calculated from the instructions and cycle counter.
+  // If one of them is not counted, this function returns NaN.
   double getIPC() {
     double res = getCounter(Events::INSTRUCTIONS.name) /
                  getCounter(Events::CPU_CYCLES.name);
