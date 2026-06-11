@@ -60,16 +60,13 @@ inline void enable_pmu() {
   asm volatile("mrs %0, pmcr_el0" : "=r"(pmcr));
   asm volatile("msr pmcr_el0, %0" : : "r"(pmcr | 0b1));
 
-  // 2. Enable the cycle counter via PMCNTENSET_EL0 (bit 31)
-  asm volatile("msr pmcntenset_el0, %0" : : "r"(1ull << 31));
-
   // Ensure pipeline is synchronized before we start counting
   asm volatile("isb");
 }
 
 inline void msr_stop(int32_t counter, uint32_t evtSel) {
   // Disable counter
-  asm volatile("msr pmcntenclr_el0, %0" : : "r"(1ull << 31));
+  asm volatile("msr pmcntenclr_el0, %0" : : "r"(0ull | evtSel));
 }
 
 inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel,
@@ -177,6 +174,9 @@ inline void msr_write_counter(uint32_t counter, uint64_t value) {
   case 5:
     asm volatile("msr pmevcntr5_el0, %0" : : "r"(value));
     break;
+  case (1u << 31):
+    asm volatile("msr pmccntr_el0, %0" : : "r"(value));
+    break;
   }
 }
 
@@ -200,6 +200,9 @@ inline uint64_t msr_read(uint32_t counter) {
     break;
   case 5:
     asm volatile("mrs %0, pmevcntr5_el0" : "=r"(value));
+    break;
+  case (1u << 31):
+    asm volatile("mrs %0, pmccntr_el0" : "=r"(value));
     break;
   }
   return value;
@@ -229,6 +232,8 @@ enum PMClass {
   // Fn8000_0001_ECX.PerfCtrExtL2I = 1.
   L2I,
 #elif defined ARCH_TARGET_ARM64
+  // Specifies the designated cycles counter register
+  CYCLES,
   // Specifies on-core ARM events
   CORE
 #endif
@@ -299,8 +304,18 @@ inline PMCSelect pmcSelect{
     PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
     PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
 #elif defined ARCH_TARGET_ARM64
-    PMC{0, 0, CORE}, PMC{1, 1, CORE}, PMC{2, 2, CORE},
-    PMC{3, 3, CORE}, PMC{4, 4, CORE}, PMC{5, 5, CORE},
+    // On graviton 3, core counters cannot count cycles, but the designated
+    // cycles counter can. Note that the id is made up. Make sure it doesn't
+    // conflict with anything else later on.
+    PMC{1u << 31, 1u << 31, CYCLES},
+
+    // Armv8_pmu3 usually has 6 counters, starting at id 0
+    PMC{0, 0, CORE},
+    PMC{1, 1, CORE},
+    PMC{2, 2, CORE},
+    PMC{3, 3, CORE},
+    PMC{4, 4, CORE},
+    PMC{5, 5, CORE},
 #endif
 };
 
@@ -357,17 +372,20 @@ constexpr PMCEvent EXC_RETURN = {0xA, CORE, "exceptions-return"};
 // change of the PC
 constexpr PMCEvent PC_WRITE_RETIRED = {0xC, CORE, "software-pc-writes"};
 // Instruction architecturally executed, immediate branch
-constexpr PMCEvent BR_IMMED_RETIRED = {0xD, CORE, "immediate-branch-instructions"};
+constexpr PMCEvent BR_IMMED_RETIRED = {0xD, CORE,
+                                       "immediate-branch-instructions"};
 // Instruction architecturally executed, condition code check pass,
 // procedure return
-constexpr PMCEvent BR_RETURN_RETIRED = {0xE, CORE, "procedure-return-instructions"};
+constexpr PMCEvent BR_RETURN_RETIRED = {0xE, CORE,
+                                        "procedure-return-instructions"};
 // Instruction architecturally executed, condition code check pass,
 // unaligned load or store
-constexpr PMCEvent UNALIGNED_LDST_RETIRED = {0xF, CORE, "unaligned-loadstore-instruction"};
+constexpr PMCEvent UNALIGNED_LDST_RETIRED = {0xF, CORE,
+                                             "unaligned-loadstore-instruction"};
 // Mispredicted or not predicted branch speculatively executed
 constexpr PMCEvent BR_MIS_PRED = {0x10, CORE, "branch-misses-issued"};
 // Cycle
-constexpr PMCEvent CPU_CYCLES = {0x11, CORE, "cpu-cycles"};
+constexpr PMCEvent CPU_CYCLES = {0x11, CYCLES, "cpu-cycles"};
 // Predictable branch speculatively executed
 constexpr PMCEvent BR_PRED = {0x12, CORE, "branch-predictions-issued"};
 // Data memory access
