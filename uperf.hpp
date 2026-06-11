@@ -377,8 +377,6 @@ typedef enum : uint64_t {
   STALL_OP_FRONTEND = 0x3E,
   // No operation sent for execution on a slot
   STALL_OP = 0x3F,
-  // Level 1 data cache read
-  L1D_CACHE = 0x40,
   // Level 2 data cache read miss
   L2_CACHE_MISS = 0x4009,
 #endif
