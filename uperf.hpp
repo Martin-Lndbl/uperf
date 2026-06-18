@@ -1,6 +1,15 @@
 #pragma once
-// TODO: Distinguish between intel and amd. Currently, only amd(zen3-5) is
-// supported
+
+// Disclaimer
+// This header targets new amd and arm chips and does not provide backward compatibility
+// Tested chips are:
+// For x86
+//    - Zen 4
+//    - Zen 5
+// For ARM
+//    - Ampere-1a
+//    - Neoverse V-1
+//    - Neoverse V-2
 
 #include <atomic>
 #include <chrono>
@@ -28,6 +37,9 @@ inline void msr_write(uint32_t msr, uint64_t value) {
                : "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32)));
 }
 
+// Stub this until we need it (currently only required for ARM)
+inline bool is_midr(uint32_t to_check) { return false; };
+
 inline void enable_pmu() {
   // TODO: This is currently a noop as the pmu is usually enabled by default
 }
@@ -51,6 +63,58 @@ inline uint64_t msr_read(uint32_t msr) {
 
 #elif defined ARCH_TARGET_ARM64
 
+inline constexpr uint32_t midr_fixed_mask = 0xFF0F'FFF0u;
+
+// To check if we currently run on a specific CPU.
+inline bool is_midr(uint32_t to_check) {
+  uint64_t midr;
+  __asm__ volatile("mrs %0, midr_el1" : "=r"(midr));
+  return (static_cast<uint32_t>(midr) & midr_fixed_mask) == to_check;
+}
+
+// To check if the requested event is supported on this CPU
+inline bool is_event_supported(uint64_t value) {
+  uint64_t pmceid;
+  uint64_t cmp;
+  if (value < 0x20) {
+    // The event is supported if pmceid0[value] = 1. (lower 32 bit of pmceid0)
+    cmp = value;
+    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
+  } else if (value < 0x40) {
+    // The event is supported if pmceid1[value-0x20] = 1. (lower 32 bit of
+    // pmceid1)
+    cmp = value - 0x20;
+    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
+  } else if (value < 0x4000) {
+    // There is no pmceid3 in 64bit mode to validate these counters
+    std::cout << "Warning: Requested event 0x" << std::hex << value
+              << " could not be checked for compatibility" << std::endl;
+    return true;
+  } else if (value < 0x4020) {
+    // The event is supported if pmceid0[value-0x4000] = 1. (upper 32 bit of
+    // pmceid0)
+    cmp = value - 0x4000;
+    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
+  } else if (value < 0x4040) {
+    // The event is supported if pmceid1[value-0x4020] = 1. (upper 32 bit of
+    // pmceid1)
+    cmp = value - 0x4020;
+    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
+  } else {
+    // There is no pmceid3 in 64bit mode to validate these counters
+    std::cout << "Warning: Requested event 0x" << std::hex << value
+              << " could not be checked for compatibility" << std::endl;
+    return true;
+  }
+
+  if (((1ull << cmp) & pmceid) == 0) {
+    std::cerr << "Requested event 0x" << std::hex << value
+              << " is not supported." << std::endl;
+    return false;
+  }
+  return true;
+}
+
 inline void enable_pmu() {
   uint64_t pmcr;
 
@@ -72,58 +136,8 @@ inline void msr_stop(int32_t counter, uint32_t evtSel) {
 inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel,
                                 uint64_t value) {
   // Ensure the event is supported
-  uint64_t pmceid;
-  uint64_t cmp;
-  // Without FEAT_PMUv3p1
-  // if (value < 64) {
-  //   cmp = value;
-  //   asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
-  // } else if (value < 128){
-  //   asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
-  //   cmp = value - 64;
-  // } else {
-  //   std::cout << "Warning: Requested event 0x" << std::hex << value << "
-  //   could not be checked for compatibility" << std::endl; goto skipcheck;
-  // }
-
-  // With FEAT_PMUv3p1
-  if (value < 0x20) {
-    // The event is supported if pmceid0[value] = 1. (lower 32 bit of pmceid0)
-    cmp = value;
-    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
-  } else if (value < 0x40) {
-    // The event is supported if pmceid1[value-0x20] = 1. (lower 32 bit of
-    // pmceid1)
-    cmp = value - 0x20;
-    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
-  } else if (value < 0x4000) {
-    // There is no pmceid3 in 64bit mode to validate these counters
-    std::cout << "Warning: Requested event 0x" << std::hex << value
-              << " could not be checked for compatibility" << std::endl;
-    goto skipcheck;
-  } else if (value < 0x4020) {
-    // The event is supported if pmceid0[value-0x4000] = 1. (upper 32 bit of
-    // pmceid0)
-    cmp = value - 0x4000;
-    asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
-  } else if (value < 0x4040) {
-    // The event is supported if pmceid1[value-0x4020] = 1. (upper 32 bit of
-    // pmceid1)
-    cmp = value - 0x4020;
-    asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
-  } else {
-    // There is no pmceid3 in 64bit mode to validate these counters
-    std::cout << "Warning: Requested event 0x" << std::hex << value
-              << " could not be checked for compatibility" << std::endl;
-    goto skipcheck;
-  }
-
-  if (((1ull << cmp) & pmceid) == 0) {
-    std::cerr << "Requested event 0x" << std::hex << value
-              << " is not supported." << std::endl;
-  }
-
-skipcheck:
+  if (!is_event_supported(value))
+    return;
 
   // Write event configuration into corresponding register
   switch (evtSel) {
@@ -210,6 +224,9 @@ inline uint64_t msr_read(uint32_t counter) {
 
 #endif
 
+// Implementer=0x41, Arch=0xF, Part=0xD46
+inline constexpr uint32_t midr_neoverseV1 = 0x410F'D460u;
+
 namespace uperf {
 
 // ---------------------------------------
@@ -221,16 +238,6 @@ enum PMClass {
 #ifdef ARCH_TARGET_X86_64
   // Specifies on-core AMD events
   CORE,
-  // WARN: Not supported by KVM
-  // Specifies Northbridge events to be counted and controls other aspects of
-  // counter operation. Support for these MSRs is indicated by CPUID
-  // Fn8000_0001_ECX.PerfCtrExtNB = 1
-  NORTHBRIDGE,
-  // WARN: Not supported by KVM
-  // Specifies the L2 cache events to be counted and controls other aspects of
-  // counter operation. Support for these MSRs is indicated by CPUID
-  // Fn8000_0001_ECX.PerfCtrExtL2I = 1.
-  L2I,
 #elif defined ARCH_TARGET_ARM64
   // Specifies the designated cycles counter register
   CYCLES,
@@ -275,7 +282,12 @@ struct PMC {
 
 // TODO: Extend this logic to support sharing counters between groups of cores
 struct PMCSelect {
-  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {}
+  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {
+    if (is_midr(midr_neoverseV1)) {
+      this->pmcs.pop_back();
+      std::cout << "Detected ARM Neoverse V1: Disabling counter 0. You only have 5 counters available." << std::endl;
+    }
+  }
 
   PMC *acquire(PMClass pmClass, uint8_t retries = 0) {
     for (auto &pmc : pmcs) {
@@ -309,13 +321,14 @@ inline PMCSelect pmcSelect{
     // conflict with anything else later on.
     PMC{1u << 31, 1u << 31, CYCLES},
 
-    // Armv8_pmu3 usually has 6 counters, starting at id 0
-    PMC{0, 0, CORE},
-    PMC{1, 1, CORE},
-    PMC{2, 2, CORE},
-    PMC{3, 3, CORE},
-    PMC{4, 4, CORE},
+    // Armv8_pmu3 usually has 6 counters (ids 0-5)
     PMC{5, 5, CORE},
+    PMC{4, 4, CORE},
+    PMC{3, 3, CORE},
+    PMC{2, 2, CORE},
+    PMC{1, 1, CORE},
+    // Note: id 0 is last here so we can pop() it for graviton3 chips
+    PMC{0, 0, CORE},
 #endif
 };
 
