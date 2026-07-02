@@ -125,6 +125,7 @@ We only list architectures we tested on. Similar ones may work sufficiently as w
 #### x86
 - Zen 4
 - Zen 5
+- Intel Skylake
 #### ARM
 - Ampere 1a
 - Neoverse V-1
