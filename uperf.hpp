@@ -1,9 +1,8 @@
 #pragma once
 
 // Disclaimer
-// This header targets new amd and arm chips and does not provide backward compatibility
-// Tested chips are:
-// For x86
+// This header targets new amd and arm chips and does not provide backward
+// compatibility Tested chips are: For x86
 //    - Zen 4
 //    - Zen 5
 // For ARM
@@ -11,13 +10,14 @@
 //    - Neoverse V-1
 //    - Neoverse V-2
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
-#include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -30,6 +30,11 @@
 #endif
 
 #ifdef ARCH_TARGET_X86_64
+
+inline uint32_t pmu_num_counters() {
+  // TODO: This is currently a stub / best guess for amd processors
+  return 6;
+}
 
 inline void msr_write(uint32_t msr, uint64_t value) {
   asm volatile("wrmsr"
@@ -64,6 +69,13 @@ inline uint64_t msr_read(uint32_t msr) {
 #elif defined ARCH_TARGET_ARM64
 
 inline constexpr uint32_t midr_fixed_mask = 0xFF0F'FFF0u;
+
+// To check how many hardware counters are available
+inline uint32_t pmu_num_counters() {
+  uint64_t pmcr;
+  asm volatile("mrs %0, pmcr_el0" : "=r"(pmcr));
+  return (pmcr >> 11) & 0x1F;
+}
 
 // To check if we currently run on a specific CPU.
 inline bool is_midr(uint32_t to_check) {
@@ -118,19 +130,43 @@ inline bool is_event_supported(uint64_t value) {
 inline void enable_pmu() {
   uint64_t pmcr;
 
-  // 1. Read PMCR_EL0, set E (Enable)
-  // We could also set 0b101 to also reset the cycle counter bits but not sure
-  // if its required
-  asm volatile("mrs %0, pmcr_el0" : "=r"(pmcr));
-  asm volatile("msr pmcr_el0, %0" : : "r"(pmcr | 0b1));
-
-  // Ensure pipeline is synchronized before we start counting
-  asm volatile("isb");
+  // Clear all counters
+  asm volatile("msr pmcntenclr_el0, %0\t\n"
+               "isb" ::"r"((uint64_t)0xFFFFFFFF)
+               : "memory");
+  // 1. Read PMCR_EL0
+  // - set bit[0]: E (Enable)
+  // - set bit[1]: P (Reset event counters)
+  // - set bit[2]: C (Reset cycle counter)
+  // - clr bit[3]: D (Cycle counter divider)
+  asm volatile("mrs %0, pmcr_el0\n\t"
+               "orr %0, %0, #0b111\n\t"
+               "and %0, %0, #~0b1000\n\t"
+               "msr pmcr_el0, %0\n\t"
+               "isb\n\t"
+               : "=&r"(pmcr)
+               :
+               : "memory");
 }
 
 inline void msr_stop(int32_t counter, uint32_t evtSel) {
   // Disable counter
-  asm volatile("msr pmcntenclr_el0, %0" : : "r"(0ull | evtSel));
+  asm volatile("msr pmcntenclr_el0, %0" : : "r"((uint64_t)evtSel));
+  asm volatile("isb" ::: "memory");
+}
+
+inline void msr_write_counter(uint32_t counter, uint64_t value) {
+  switch (counter) {
+    // clang-format off
+  case 0: asm volatile("msr pmevcntr0_el0, %0" : : "r"(value)); break;
+  case 1: asm volatile("msr pmevcntr1_el0, %0" : : "r"(value)); break;
+  case 2: asm volatile("msr pmevcntr2_el0, %0" : : "r"(value)); break;
+  case 3: asm volatile("msr pmevcntr3_el0, %0" : : "r"(value)); break;
+  case 4: asm volatile("msr pmevcntr4_el0, %0" : : "r"(value)); break;
+  case 5: asm volatile("msr pmevcntr5_el0, %0" : : "r"(value)); break;
+  case (1u << 31): asm volatile("msr pmccntr_el0, %0" : : "r"(value)); break;
+    // clang-format on
+  }
 }
 
 inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel,
@@ -141,83 +177,42 @@ inline void msr_start_with_conf(uint32_t counter, uint32_t evtSel,
 
   // Write event configuration into corresponding register
   switch (evtSel) {
-  case 0:
-    asm volatile("msr pmevtyper0_el0, %0" : : "r"(value));
-    break;
-  case 1:
-    asm volatile("msr pmevtyper1_el0, %0" : : "r"(value));
-    break;
-  case 2:
-    asm volatile("msr pmevtyper2_el0, %0" : : "r"(value));
-    break;
-  case 3:
-    asm volatile("msr pmevtyper3_el0, %0" : : "r"(value));
-    break;
-  case 4:
-    asm volatile("msr pmevtyper4_el0, %0" : : "r"(value));
-    break;
-  case 5:
-    asm volatile("msr pmevtyper5_el0, %0" : : "r"(value));
-    break;
+    // clang-format off
+  case 0: asm volatile("msr pmevtyper0_el0, %0" : : "r"(value)); break;
+  case 1: asm volatile("msr pmevtyper1_el0, %0" : : "r"(value)); break;
+  case 2: asm volatile("msr pmevtyper2_el0, %0" : : "r"(value)); break;
+  case 3: asm volatile("msr pmevtyper3_el0, %0" : : "r"(value)); break;
+  case 4: asm volatile("msr pmevtyper4_el0, %0" : : "r"(value)); break;
+  case 5: asm volatile("msr pmevtyper5_el0, %0" : : "r"(value)); break;
+    // clang-format on
+  case (1u << 31):
+    asm volatile("msr pmcntenset_el0, %0\n\t"
+                 "isb" ::"r"((uint64_t)(1u << 31))
+                 : "memory");
+    return;
   }
+  // Ensure pipeline is synchronized before we enable counter
+  asm volatile("isb" ::: "memory");
 
   // enable counter at index counter
   asm volatile("msr pmcntenset_el0, %0" : : "r"(1ull << counter));
 
   // Ensure pipeline is synchronized before we start counting
-  asm volatile("isb");
-}
-
-inline void msr_write_counter(uint32_t counter, uint64_t value) {
-  switch (counter) {
-  case 0:
-    asm volatile("msr pmevcntr0_el0, %0" : : "r"(value));
-    break;
-  case 1:
-    asm volatile("msr pmevcntr1_el0, %0" : : "r"(value));
-    break;
-  case 2:
-    asm volatile("msr pmevcntr2_el0, %0" : : "r"(value));
-    break;
-  case 3:
-    asm volatile("msr pmevcntr3_el0, %0" : : "r"(value));
-    break;
-  case 4:
-    asm volatile("msr pmevcntr4_el0, %0" : : "r"(value));
-    break;
-  case 5:
-    asm volatile("msr pmevcntr5_el0, %0" : : "r"(value));
-    break;
-  case (1u << 31):
-    asm volatile("msr pmccntr_el0, %0" : : "r"(value));
-    break;
-  }
+  asm volatile("isb" ::: "memory");
 }
 
 inline uint64_t msr_read(uint32_t counter) {
   uint64_t value;
   switch (counter) {
-  case 0:
-    asm volatile("mrs %0, pmevcntr0_el0" : "=r"(value));
-    break;
-  case 1:
-    asm volatile("mrs %0, pmevcntr1_el0" : "=r"(value));
-    break;
-  case 2:
-    asm volatile("mrs %0, pmevcntr2_el0" : "=r"(value));
-    break;
-  case 3:
-    asm volatile("mrs %0, pmevcntr3_el0" : "=r"(value));
-    break;
-  case 4:
-    asm volatile("mrs %0, pmevcntr4_el0" : "=r"(value));
-    break;
-  case 5:
-    asm volatile("mrs %0, pmevcntr5_el0" : "=r"(value));
-    break;
-  case (1u << 31):
-    asm volatile("mrs %0, pmccntr_el0" : "=r"(value));
-    break;
+    // clang-format off
+  case 0: asm volatile("mrs %0, pmevcntr0_el0" : "=r"(value)); break;
+  case 1: asm volatile("mrs %0, pmevcntr1_el0" : "=r"(value)); break;
+  case 2: asm volatile("mrs %0, pmevcntr2_el0" : "=r"(value)); break;
+  case 3: asm volatile("mrs %0, pmevcntr3_el0" : "=r"(value)); break;
+  case 4: asm volatile("mrs %0, pmevcntr4_el0" : "=r"(value)); break;
+  case 5: asm volatile("mrs %0, pmevcntr5_el0" : "=r"(value)); break;
+  case (1u << 31): asm volatile("mrs %0, pmccntr_el0" : "=r"(value)); break;
+    // clang-format on
   }
   return value;
 }
@@ -225,7 +220,7 @@ inline uint64_t msr_read(uint32_t counter) {
 #endif
 
 // Implementer=0x41, Arch=0xF, Part=0xD46
-inline constexpr uint32_t midr_neoverseV1 = 0x410F'D460u;
+inline constexpr uint32_t midr_neoverseV1 = 0x410F'D400u;
 
 namespace uperf {
 
@@ -249,9 +244,6 @@ enum PMClass {
 // A Performance Measurement Counter (PMC) represents a physical counter and
 // corresponding configuration registers.
 struct PMC {
-  // Whether or not this pmc is currently counting
-  std::unique_ptr<std::atomic<bool>> free;
-
   // For the corresponding performance counter, this register specifies the
   // events counted, and controls other aspects of counter operation.
   uint32_t perfEvtSel;
@@ -262,74 +254,103 @@ struct PMC {
 
   PMClass pmClass;
 
-  PMC(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass)
-      : perfEvtSel(perfEvtSel), perfCtr(perfCtr), pmClass(pmClass),
-        free(nullptr) {}
+  // Whether or not this pmc is currently counting
+  mutable std::atomic<bool> free{true};
 
+  PMC(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass)
+      : perfEvtSel(perfEvtSel), perfCtr(perfCtr), pmClass(pmClass), free(true) {
+  }
+
+  // atomic is not copyable, so define it manually
   PMC(PMC const &pmc)
       : perfEvtSel(pmc.perfEvtSel), perfCtr(pmc.perfCtr), pmClass(pmc.pmClass),
-        free(std::make_unique<std::atomic<bool>>(true)) {}
+        free(true) {}
+
+  PMC &operator=(PMC const &pmc) {
+    perfEvtSel = pmc.perfEvtSel;
+    perfCtr = pmc.perfCtr;
+    pmClass = pmc.pmClass;
+    free.store(true);
+    return *this;
+  }
 
   uint64_t probe() { return msr_read(perfCtr); }
-
   void start_with_conf(uint64_t value) {
     msr_write_counter(perfCtr, 0);
     msr_start_with_conf(perfCtr, perfEvtSel, value);
   }
-
-  void stop() { msr_stop(perfCtr, perfEvtSel); };
+  void stop() { msr_stop(perfCtr, perfEvtSel); }
 };
 
-// TODO: Extend this logic to support sharing counters between groups of cores
 struct PMCSelect {
-  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {
-    if (is_midr(midr_neoverseV1)) {
-      this->pmcs.pop_back();
-      std::cout << "Detected ARM Neoverse V1: Disabling counter 0. You only have 5 counters available." << std::endl;
+  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {}
+
+  bool erase_counter(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass) {
+    auto it = std::find_if(
+        this->pmcs.begin(), this->pmcs.end(), [&](const auto &pmc) {
+          return pmc.perfEvtSel == perfEvtSel && pmc.perfCtr == perfCtr &&
+                 pmc.pmClass == pmClass;
+        });
+    if (it == this->pmcs.end())
+      return false;
+    this->pmcs.erase(it);
+    return true;
+  }
+
+  bool erase_last_n_of_x(uint32_t n, PMClass x) {
+    auto it = this->pmcs.end();
+    while (n > 0 && it != this->pmcs.begin()) {
+      --it;
+      if (it->pmClass == PMClass::CORE) {
+        it = this->pmcs.erase(it);
+        --n;
+      }
     }
+    return n == 0;
   }
 
   PMC *acquire(PMClass pmClass, uint8_t retries = 0) {
     for (auto &pmc : pmcs) {
       bool expected = true;
       if (pmc.pmClass == pmClass &&
-          pmc.free->compare_exchange_strong(expected, false))
+          pmc.free.compare_exchange_strong(expected, false))
         return &pmc;
     }
     if (retries == 6)
       return nullptr;
-    ++retries;
-    std::cout << "Couldn't acquire PMC of the requested class. Retrying ("
-              << retries << "/6)" << std::endl;
-    return acquire(pmClass, retries);
+    return acquire(pmClass, ++retries);
   }
 
-  void release(PMC *pmc) { pmc->free->store(true); }
+  void release(PMC *pmc) { pmc->free.store(true); }
 
-private:
+protected:
   std::vector<PMC> pmcs;
 };
 
-inline PMCSelect pmcSelect{
-#ifdef ARCH_TARGET_X86_64
-    PMC{0xC0010200, 0xC0010201, CORE}, PMC{0xC0010202, 0xC0010203, CORE},
-    PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
-    PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
-#elif defined ARCH_TARGET_ARM64
-    // On graviton 3, core counters cannot count cycles, but the designated
-    // cycles counter can. Note that the id is made up. Make sure it doesn't
-    // conflict with anything else later on.
-    PMC{1u << 31, 1u << 31, CYCLES},
-
-    // Armv8_pmu3 usually has 6 counters (ids 0-5)
-    PMC{5, 5, CORE},
-    PMC{4, 4, CORE},
-    PMC{3, 3, CORE},
-    PMC{2, 2, CORE},
-    PMC{1, 1, CORE},
-    // Note: id 0 is last here so we can pop() it for graviton3 chips
-    PMC{0, 0, CORE},
-#endif
+// Specification for core-local counters.
+// This adjust the number of available counters at runtime,
+// since AWS slices the number of counters per VM.
+struct PMCSelectCore : PMCSelect {
+  PMCSelectCore(std::initializer_list<PMC> pmcs) : PMCSelect(pmcs) {
+    uint32_t act_ctrs = pmu_num_counters();
+    uint32_t exp_ctrs{0};
+    for (auto &c : this->pmcs) {
+      exp_ctrs += c.pmClass == CORE ? 1 : 0;
+    }
+    if (act_ctrs < exp_ctrs) {
+      std::cout << "Expected " << exp_ctrs << " hardware counters, but only "
+                << act_ctrs << " are available.\n Assuming the first "
+                << act_ctrs << " counters to be valid." << std::endl;
+      erase_last_n_of_x(exp_ctrs - act_ctrs, CORE);
+    } else if (is_midr(midr_neoverseV1)) {
+      // TODO: There is a nicer way to check this. We only want to disable on
+      // neoverse v1 + kvm
+      std::cout << "Detected ARM Neoverse V1: Disabling counter 0 since it "
+                   "doesn't work reliably on this CPU. You have "
+                << act_ctrs - 1 << " counters available" << std::endl;
+      erase_counter(0, 0, CORE);
+    }
+  }
 };
 
 struct PMCEvent {
@@ -338,7 +359,7 @@ struct PMCEvent {
   const char *name;
 };
 
-namespace Events {
+namespace PERF_COUNT_HW {
 #ifdef ARCH_TARGET_X86_64
 // Cycle
 constexpr PMCEvent CPU_CYCLES = {0x430076, CORE, "cpu-cycles"};
@@ -470,7 +491,7 @@ constexpr PMCEvent STALL_OP = {0x3F, CORE, ""};
 constexpr PMCEvent L2_CACHE_MISS = {0x4009, CORE, "l2-cache-misses"};
 
 #endif
-} // namespace Events
+} // namespace PERF_COUNT_HW
 
 // ---------------------------------------
 // High level measurement logic
@@ -482,13 +503,16 @@ struct Event {
   uint64_t before;
   uint64_t after;
 
-  Event(PMCEvent pmce) : pmce(pmce) {}
+  bool valid = true;
+
+  Event(PMCEvent pmce, PMCSelect &pmcs) : pmce(pmce), pmcs(pmcs) {}
 
   void start() {
-    pmc = corePMCs.acquire(pmce.pmClass);
+    pmc = pmcs.acquire(pmce.pmClass);
     if (!pmc) {
       std::cerr << "[ERROR] All hardware counters are occupied. Event "
                 << pmce.name << " will not be measured." << std::endl;
+      valid = false;
       return;
     }
     pmc->start_with_conf(pmce.bitmap);
@@ -500,39 +524,110 @@ struct Event {
       return;
     after = pmc->probe();
     pmc->stop();
-    corePMCs.release(pmc);
+    pmcs.release(pmc);
   }
 
-  uint64_t report() { return after - before; }
+  uint64_t report() { return valid ? after - before : 0; }
 
 private:
-  PMCSelect &corePMCs{pmcSelect};
+  PMCSelect &pmcs;
   PMC *pmc;
 };
 
-struct Collection {
-  std::vector<Event> events;
+}; // namespace uperf
+
+// Shim layer to match https://github.com/viktorleis/perfevent
+using namespace uperf;
+struct PerfEvent {
+private:
+  // By default, each collection operates on known core-local counters,
+  // but selections can also be shared between cores to measure uncore counters
+  // (e.g. L3 cache counters)
+  PMCSelectCore default_pmcs{
+#ifdef ARCH_TARGET_X86_64
+      PMC{0xC0010200, 0xC0010201, CORE}, PMC{0xC0010202, 0xC0010203, CORE},
+      PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
+      PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
+#elif defined ARCH_TARGET_ARM64
+      // Armv8_pmu3 usually has 6 counters (ids 0-5)
+      PMC{0, 0, CORE},
+      PMC{1, 1, CORE},
+      PMC{2, 2, CORE},
+      PMC{3, 3, CORE},
+      PMC{4, 4, CORE},
+      PMC{5, 5, CORE},
+
+      PMC{1u << 31, 1u << 31, CYCLES},
+#endif
+  };
+public:
+  // The selection of hardware counters available to this collection.
+  uperf::PMCSelect &pmcs = default_pmcs;
+  // A vector of registered events. Must not be larger than the number of
+  // available hardware counters.
+  std::vector<uperf::Event> events;
+
   std::chrono::time_point<std::chrono::steady_clock> startTime;
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
 
-  Collection() {
+  // Constructor to use with default set of counters.
+  // Common use case: On-core measurements, single Collection per core.
+  PerfEvent(bool set_default_counters = true) {
     enable_pmu();
 
-    // There are usually 6 hardware counters of type CORE.
-    // Trying to register more than that will
-    registerCounter(Events::CPU_CYCLES);
-    registerCounter(Events::INSTRUCTIONS);
-    registerCounter(Events::L2_CACHE_MISS);
-    registerCounter(Events::BRANCH_MISS);
+    if (set_default_counters) {
+      registerCounter(PERF_COUNT_HW::CPU_CYCLES);
+      registerCounter(PERF_COUNT_HW::INSTRUCTIONS);
+      registerCounter(PERF_COUNT_HW::L2_CACHE_MISS);
+      registerCounter(PERF_COUNT_HW::BRANCH_MISS);
+    }
   }
 
-  void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce)); }
+  // Constructor to use with custom set of counters.
+  // Common use case: Share counters between multiple collections
+  PerfEvent(PMCSelect &pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
+
+  void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce, pmcs)); }
+
   void registerCounter(PMCEvent pmce, const char *name) {
     pmce.name = name;
     registerCounter(pmce);
   }
+
   void registerCounter(uint64_t bitmap, PMClass pmClass, const char *name) {
     registerCounter({bitmap, pmClass, name});
+  }
+
+  void startCounters() {
+    for (auto &event : events) {
+      event.start();
+    }
+    startTime = std::chrono::steady_clock::now();
+  }
+
+  void stopCounters() {
+    stopTime = std::chrono::steady_clock::now();
+    for (auto &event : events) {
+      event.stop();
+    }
+  }
+
+  double getDuration() {
+    return std::chrono::duration<double>(stopTime - startTime).count();
+  }
+
+  size_t getDurationUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(stopTime -
+                                                                 startTime)
+        .count();
+  }
+  //
+  // IPC is calculated from the instructions and cycle counter.
+  // If one of them is not counted, this function returns NaN.
+  double getIPC() {
+    double res = getCounter(PERF_COUNT_HW::INSTRUCTIONS.name) /
+                 getCounter(PERF_COUNT_HW::CPU_CYCLES.name);
+    return res > 0 ? res : NAN;
   }
 
   double getCounter(const char *name) {
@@ -541,18 +636,6 @@ struct Collection {
         return event.report();
     }
     return -1;
-  }
-
-  double getDuration() {
-    return std::chrono::duration<double>(stopTime - startTime).count();
-  }
-
-  // IPC is calculated from the instructions and cycle counter.
-  // If one of them is not counted, this function returns NaN.
-  double getIPC() {
-    double res = getCounter(Events::INSTRUCTIONS.name) /
-                 getCounter(Events::CPU_CYCLES.name);
-    return res > 0 ? res : NAN;
   }
 
   static void printCounter(std::ostream &headerOut, std::ostream &dataOut,
@@ -571,7 +654,7 @@ struct Collection {
                            bool addComma = true) {
     std::stringstream stream;
     stream << std::fixed << std::setprecision(2) << counterValue;
-    printCounter(headerOut, dataOut, name, stream.str(), addComma);
+    PerfEvent::printCounter(headerOut, dataOut, name, stream.str(), addComma);
   }
 
   void printReport(std::ostream &out, uint64_t normalizationConstant) {
@@ -596,21 +679,132 @@ struct Collection {
 
     printCounter(headerOut, dataOut, "scale", normalizationConstant);
 
+    // derived metrics
     printCounter(headerOut, dataOut, "IPC", getIPC());
   }
 
-  void startCounters() {
-    for (auto &event : events) {
-      event.start();
-    }
-    startTime = std::chrono::steady_clock::now();
+  template <typename T>
+  static void printCounterVertical(std::ostream &infoOut, std::string name,
+                                   T counterValue, int eNameWidth) {
+    std::stringstream stream;
+    stream << std::fixed << std::setprecision(2) << counterValue;
+    infoOut << std::setw(eNameWidth) << std::left << name << " : "
+            << stream.str() << std::endl;
   }
 
-  void stopCounters() {
-    stopTime = std::chrono::steady_clock::now();
-    for (auto &event : events) {
-      event.stop();
+  void printReportVertical(std::ostream &out, uint64_t normalizationConstant) {
+    std::stringstream info;
+    printReportVerticalUtil(info, normalizationConstant);
+    out << info.str() << std::endl;
+  }
+
+  void printReportVerticalUtil(std::ostream &infoOut,
+                               uint64_t normalizationConstant) {
+    if (!events.size())
+      return;
+
+    // get width of the widest event name. Minimum width is the one of 'scale'
+    int eNameWidth = 5;
+    for (unsigned i = 0; i < events.size(); i++) {
+      eNameWidth = std::max(
+          static_cast<int>(std::char_traits<char>::length(events[i].pmce.name)),
+          eNameWidth);
     }
+
+    printCounterVertical(infoOut, "duration", getDuration(), eNameWidth);
+    // print all metrics
+    for (unsigned i = 0; i < events.size(); i++) {
+      printCounterVertical(infoOut, events[i].pmce.name,
+                           events[i].report() /
+                               static_cast<double>(normalizationConstant),
+                           eNameWidth);
+    }
+
+    printCounterVertical(infoOut, "scale", normalizationConstant, eNameWidth);
+
+    // derived metrics
+    printCounterVertical(infoOut, "IPC", getIPC(), eNameWidth);
   }
 };
-} // namespace uperf
+
+struct BenchmarkParameters {
+
+  void setParam(const std::string &name, const std::string &value) {
+    params[name] = value;
+  }
+
+  void setParam(const std::string &name, const char *value) {
+    params[name] = value;
+  }
+
+  template <typename T> void setParam(const std::string &name, T value) {
+    setParam(name, std::to_string(value));
+  }
+
+  void printParams(std::ostream &header, std::ostream &data) {
+    for (auto &p : params) {
+      PerfEvent::printCounter(header, data, p.first, p.second);
+    }
+  }
+
+  BenchmarkParameters(std::string name = "") {
+    if (name.length())
+      setParam("name", name);
+  }
+
+private:
+  std::map<std::string, std::string> params;
+};
+
+struct PerfRef {
+  union {
+    PerfEvent instance;
+    PerfEvent *pointer;
+  };
+  bool has_instance;
+
+  PerfRef() : instance(), has_instance(true) {}
+  PerfRef(PerfEvent *ptr) : pointer(ptr), has_instance(false) {}
+  PerfRef(const PerfRef &) = delete;
+
+  ~PerfRef() {
+    if (has_instance)
+      instance.~PerfEvent();
+  }
+
+  PerfEvent *operator->() { return has_instance ? &instance : pointer; }
+};
+
+struct PerfEventBlock {
+  PerfRef e;
+  uint64_t scale;
+  BenchmarkParameters parameters;
+  bool printHeader;
+
+  PerfEventBlock(uint64_t scale = 1, BenchmarkParameters params = {},
+                 bool printHeader = true)
+      : scale(scale), parameters(params), printHeader(printHeader) {
+    e->startCounters();
+  }
+
+  PerfEventBlock(PerfEvent &perf, uint64_t scale = 1,
+                 BenchmarkParameters params = {}, bool printHeader = true)
+      : e(&perf), scale(scale), parameters(params), printHeader(printHeader) {
+    e->startCounters();
+  }
+
+  ~PerfEventBlock() {
+    e->stopCounters();
+    std::stringstream header;
+    std::stringstream data;
+    parameters.printParams(header, data);
+    PerfEvent::printCounter(header, data, "time sec", e->getDuration());
+    PerfEvent::printCounter(header, data, "micros", e->getDurationUs());
+    PerfEvent::printCounter(header, data, "millis",
+                            static_cast<double>(e->getDurationUs()) / 1000);
+    e->printReport(header, data, scale);
+    if (printHeader)
+      std::cout << header.str() << std::endl;
+    std::cout << data.str() << std::endl;
+  }
+};
